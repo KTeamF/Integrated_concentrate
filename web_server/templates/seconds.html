@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>강의별 학생 집중도 대시보드</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        @font-face {
+        font-family: 'Freesentation-9Black';
+        src: url('https://fastly.jsdelivr.net/gh/projectnoonnu/2404@1.0/Freesentation-9Black.woff2') format('woff2');
+        font-weight: 900;
+        font-style: normal;
+    }
+
+        body {
+            font-family: 'Freesentation-9Black', sans-serif;
+            background: url('https://images.unsplash.com/photo-1631885661118-5107a6111772?q=80&w=1931&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D') no-repeat center center fixed;
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        header h1 {
+            font-size: 3em;
+            font-weight: bold;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            animation: fadeIn 1.5s ease-in-out;
+        }
+
+        .lecture-selector {
+            font-size: 1.1em;
+            position: relative;
+            display: inline-block;
+        }
+
+        .lecture-selector select:focus + .lecture-selector::after {
+            color: #1cc88a;
+        }
+
+        .date-picker {
+            margin-bottom: 30px;
+            font-size: 1.2em;
+            text-align: center;
+        }
+
+        .date-picker input,
+        .date-picker button {
+            margin: 5px;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+
+        .date-picker button {
+            background-color: #4e73df;
+            color: #fff;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .date-picker button:hover {
+            background-color: #1cc88a;
+        }
+
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            box-shadow: 0 15px 45px rgba(0, 0, 0, 0.3);
+            animation: fadeIn 2s ease-in-out;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-gap: 20px;
+            width: 100%;
+            margin-top: 20px;
+            animation: fadeIn 1.5s ease-in-out;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 12px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+            padding: 25px;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 12px 25px rgba(0, 0, 0, 0.2);
+        }
+
+        .card h2 {
+            font-size: 1.8em;
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .card .value {
+            font-size: 3em;
+            font-weight: bold;
+            color: #4e73df;
+        }
+
+        #focus-chart, #period-chart {
+            width: 100%;
+            height: 350px;
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 15px;
+            padding: 15px;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media print {
+            body {
+                background: white;
+            }
+
+            header, button {
+                display: none;
+            }
+
+            .container {
+                width: 100%;
+                max-width: 100%;
+                padding: 10px;
+                background: white;
+                color: black;
+                box-shadow: none;
+                font-size: 10px;
+            }
+
+            .dashboard {
+                display: flex;
+                flex-direction: row;
+                gap: 10px;
+            }
+
+            .dashboard .card {
+                width: 50%;
+                color: black;
+                background: white;
+                box-shadow: none;
+                border: 1px solid #ddd;
+            }
+
+            .card{
+                box-shadow: none;
+                border: 1px solid #ddd;
+            }
+
+            canvas {
+                width: 100% !important;
+                height: 250px !important;
+            }
+
+            @page {
+                size: A4;
+                margin: 0mm;
+            }
+        }
+
+    </style>
+</head>
+<body>
+    <header>
+        <h1>강의별 학생 집중도 대시보드</h1>
+    </header>
+    <div class="lecture-selector">
+        <label for="lecture-select">강의를 선택하세요</label>
+        <select id="lecture-select">
+        </select>
+    </div>
+
+    <div class="date-picker">
+
+        <label for="start-date">시작 날짜: </label>
+        <input type="date" id="start-date" name="start-date">
+        <label for="end-date">종료 날짜: </label>
+        <input type="date" id="end-date" name="end-date">
+        <button type="button" onclick="fetchPeriodData()">적용</button>
+
+    </div>
+
+    <div class="container">
+        <div class="dashboard">
+            <div class="card">
+                <h2>총 학생 수</h2>
+                <div class="value" id="total-students">0</div>
+            </div>
+
+            <div class="card">
+                <h2>평균 집중도</h2>
+                <div class="value" id="average-focus">0%</div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-top: 20px; width: 100%;">
+            <h2>기간별 집중도 변화</h2>
+            <canvas id="period-chart"></canvas>
+        </div>
+
+        <div class="card" style="margin-top: 20px; width: 100%;">
+            <h2>실시간 집중도 변화</h2>
+            <canvas id="focus-chart"></canvas>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        const ctx = document.getElementById('focus-chart').getContext('2d');
+        const focusChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '집중도 (%)',
+                    data: [],
+                    backgroundColor: 'rgba(0, 87, 183, 0.2)',
+                    borderColor: '#4e73df',
+                    borderWidth: 2,
+                    fill: true,
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) { return value + "%" }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+
+        const periodCtx = document.getElementById('period-chart').getContext('2d');
+        const periodChart = new Chart(periodCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '집중도 (%)',
+                    data: [],
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    borderColor: '#ff6384',
+                    borderWidth: 2,
+                    fill: true,
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            callback: function(value) { return value + "%" }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+function fetchFocusData() {
+    const lectureName = document.getElementById('lecture-select').value;
+    const startDate = document.getElementById('start-date').value;
+    const endDate = document.getElementById('end-date').value;
+
+    let url = `/api/get_focus_percentage?lecture_name=${lectureName}`;
+    if (startDate && endDate) {
+        url += `&start_date=${startDate}&end_date=${endDate}`;
+    }
+
+    fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            const time = new Date().toLocaleString();
+            const focus = data.average_focus_percentage;
+
+            focusChart.data.labels.push(time);
+            focusChart.data.datasets[0].data.push(focus);
+
+            if (focusChart.data.labels.length > 20) {
+                focusChart.data.labels.shift();
+                focusChart.data.datasets[0].data.shift();
+            }
+
+            focusChart.update();
+
+            document.getElementById('average-focus').textContent = `${focus}%`;
+            document.getElementById('total-students').textContent = data.total_students;
+        })
+        .catch(error => console.error('데이터 가져오기 오류:', error));
+}
+
+function fetchPeriodData() {
+    const lectureName = document.getElementById('lecture-select').value;
+    const startDate = document.getElementById('start-date').value;
+    const endDate = document.getElementById('end-date').value;
+
+    if (startDate && endDate) {
+        const url = `/api/get_focus_percentage?lecture_name=${lectureName}&start_date=${startDate}&end_date=${endDate}`;
+
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                console.log('전체 API 응답 데이터:', data);  // 전체 데이터 확인
+
+                const periodLabels = data.focus_data.map(item => item.date);  // 예: 각 항목에서 날짜 추출
+                const periodFocusData = data.focus_data.map(item => item.focus_percentage);  // 예: 각 항목에서 집중도 추출
+
+                console.log('기간 라벨:', periodLabels);
+                console.log('기간 집중도 데이터:', periodFocusData);
+
+                periodChart.data.labels = periodLabels;
+                periodChart.data.datasets[0].data = periodFocusData;
+                periodChart.update();
+
+                console.log('기간 라벨:', data.period_labels);
+                console.log('기간 집중도 데이터:', data.period_focus_data);
+            })
+            .catch(error => console.error('기간별 데이터 가져오기 오류:', error));
+    } else {
+        alert("시작 날짜와 종료 날짜를 모두 선택해 주세요.");
+    }
+}
+
+setInterval(fetchFocusData, 10000);
+
+fetch('/api/get_lectures')
+    .then(response => response.json())
+    .then(data => {
+        const selectElement = document.getElementById('lecture-select');
+        data.forEach(lecture => {
+            const option = document.createElement('option');
+            option.value = lecture;
+            option.textContent = lecture;
+            selectElement.appendChild(option);
+        });
+    })
+    .catch(error => console.error('강의 목록 가져오기 오류:', error));
+
+
+    </script>
+</body>
+</html>

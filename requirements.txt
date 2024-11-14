@@ -1,0 +1,4 @@
+certifi~=2024.8.30
+pymongo~=4.10.1
+paho-mqtt~=2.1.0
+
