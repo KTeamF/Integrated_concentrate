@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>학생 집중도 분석</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-rbsA2VBKQhggwzxH7pPCaAqO46MgnOM80zW1RWuH61DGLwZJEdK2Kadq2F9CUG65" crossorigin="anonymous">
+    <style>
+        *{margin: 0; padding: 0;}
+        body{width: 60%; margin: 0 auto;}
+        div {padding: 20px 0px 20px;}
+        .chart-container {margin-bottom: 40px;}
+
+        /*반응형웹구현*/
+        @media (max-width: 768px) {
+            h2 {font-size: 1.5rem;}
+            h3 {font-size: 1.25rem;}
+            canvas {height: 30vh; width: 90vw;}
+            body {width: 100%; margin: 0 10px;}
+        }
+
+         /*프린트 시 차트별로 출력*/
+        @media print {
+            .container {
+                page-break-before: always;
+            }
+            .container:first-child {
+                page-break-before: auto;
+            }
+        }
+
+    </style>
+
+</head>
+<body>
+
+    <div class="container">
+        <label for="lecture-select">강의를 선택하세요:
+            <select id="lecture-select">
+                <!-- 강의 목록이 추가됨 -->
+            </select>
+        </label>
+
+        <div for="selectedDate">날짜를 선택하세요:
+        <input type="date" id="selectedDate"> <button class="btn btn-dark" onclick="startDailyChart()">확인</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>이 강의의 평균 집중도는 <span id="focusedStudentAvg"></span>% 입니다.</h2> <!--평균 집중도-->
+        <div class="chart-container">
+            <canvas id="chartAvg" style="height:20vh; width:60vw;"></canvas>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>당일 집중도 요약</h3> <!--선택한 날짜의 집중도 요약(도넛 차트)-->
+        <div class="chart-container">
+            <canvas id="chartDay" style="height:35vh; width:35vw;"></canvas>
+        </div>
+    </div>
+
+    <div class="container"> <!--선택한 날짜의 시간 별 집중도(라인 차트)-->
+        <h3>시간 별 학생 집중도</h3>
+        <div class="chart-container">
+            <canvas id="chartTime" style="height:40vh; width:60vw;"></canvas>
+        </div>
+    </div>
+
+    <div class="container"> <!--선택한 기간의 집중하지 않은 학생 수(바 차트)-->
+        <h3>기간 내 집중하지 않은 학생의 수</h3>
+        <br>
+        <input type="date" id="startday"> ㅡ <input type="date" id="lastday">
+        <button class="btn btn-dark" onclick="startTermChart()">확인</button>
+        <div class="chart-container">
+            <canvas id="chartTerm" style="height:60vh; width:60vw;"></canvas>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-kenU1KFdBIe4zVF0s0G1M5b4hcpxyD9F7jL+jjXkk+Q2h455rYXK/7HAuoJl+0I4" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+
+        // 강의 목록 가져오기
+        fetch('/lectures')
+            .then(response => response.json())
+            .then(data => {
+                const lectureSelect = document.getElementById('lecture-select');
+                data.lectures.forEach(lecture => {
+                    const option = document.createElement('option');
+                    option.value = lecture;
+                    option.textContent = lecture;
+                    lectureSelect.appendChild(option);
+                });
+            });
+
+        // 강의 선택 시 평균 집중도 차트 업데이트
+        document.getElementById('lecture-select').addEventListener('change', function() {
+        let lectureName = this.value;
+        fetchFocusData(lectureName); // 강의 선택 시 평균 집중도 데이터 가져오기
+        });
+
+        let focusedStudentAvg;
+        function fetchFocusData(lectureName) {
+            // 전체 강의 평균 집중도 데이터 요청
+            fetch(`/get_focus_percentage?lecture_name=${lectureName}`)
+                .then(response => response.json())
+                .then(json => {
+                    if (json.average_focus_percentage !== undefined) {
+                        document.getElementById('focusedStudentAvg').textContent = json.average_focus_percentage.toFixed(2);
+
+                        // 평균 집중도 차트 업데이트
+                        chartAvg.data.datasets[0].data = [focusedStudentAvg];
+                        chartAvg.update();
+                    } else {
+                        document.getElementById('focusedStudentAvg').textContent = '데이터를 불러오는 중 오류가 발생했습니다.';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching data:', error);
+                    document.getElementById('focusedStudentAvg').textContent = '데이터를 불러오는 중 오류가 발생했습니다.';
+                });
+        }
+
+        //전체 기간의 평균 집중도 차트
+        const Avgctx = document.getElementById('chartAvg').getContext('2d');
+        const chartAvg = new Chart(Avgctx, {
+            type: 'bar',
+            data: {
+                labels: ['전체기간'],
+                datasets: [{
+                    label: '평균 집중도(%)',
+                    data: [focusedStudentAvg],
+                    backgroundColor: ['rgba(99, 255, 132, 0.8)']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y'
+            }
+        });
+
+        let chartDay;
+        // 선택한 날의 학생 집중도 요약 차트
+        function createDailyChart(focusedStudent, unfocusedStudent) {
+            var Dailyctx = document.getElementById('chartDay').getContext('2d');
+
+            if (chartDay) {
+                chartDay.destroy(); // 기존 차트가 있으면 삭제
+            }
+
+            chartDay = new Chart(Dailyctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['집중한 학생', '집중하지 않은 학생'],
+                    datasets: [{
+                        label: '당일요약',
+                        data: [focusedStudent, unfocusedStudent],
+                        backgroundColor: ['rgba(99, 255, 132, 0.8)', 'rgba(99, 255, 3, 0.2)']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                boxWidth: 100,
+                                boxHeight: 40,
+                                font: {
+                                    size: 15
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        let chartTime;
+
+        // 선택한 날의 시간 차트
+        function createTimeChart(timeLabels, focusedData) {
+            const Timectx = document.getElementById('chartTime').getContext('2d');
+
+            if (chartTime) { // 기존 차트가 있으면 삭제
+                chartTime.destroy();
+            }
+
+            chartTime = new Chart(Timectx, {
+                type: 'line',
+                data: {
+                    labels: timeLabels, //시간별 라벨
+                    datasets: [{
+                        label: '시간 별 집중한 학생 수',
+                        data: focusedData, //시간 별 집중한 학생 수 데이터
+                        borderColor: ['rgba(99, 255, 132, 0.8)'],
+                        backgroundColor: ['rgba(99, 255, 132, 0.8)']
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false
+                }
+            });
+        }
+
+        //선택한 날짜의 차트들(도넛, 라인차트)을 생성
+        function startDailyChart() {
+            // 강의와 날짜가 선택되었는지 확인
+            let lectureName = document.getElementById('lecture-select').value;
+            let selectedDate = document.getElementById('selectedDate').value;
+
+            if (!lectureName || !selectedDate) {
+                alert("날짜와 강의를 모두 선택해주십시오.");
+                return;
+            }
+
+            fetch(`/data?lecture_name=${lectureName}&date=${selectedDate}`)
+                .then(response => response.json())
+                .then(json => {
+                    // 집중한 학생과 집중하지 않은 학생 계산
+                    let totalStudents = json.total_students;
+                    let focusedStudent = json.focused_students;
+                    let unfocusedStudent = totalStudents - focusedStudent;
+
+                    // 시간 및 집중한 학생 수 데이터 추출
+                    let timeLabels = json.elapsed_time_data.map(item => item.elapsed_time_minutes + '분');
+                    let focusedData = json.elapsed_time_data.map(item => item.focused_students);
+
+                    // 차트 생성
+                    createDailyChart(focusedStudent, unfocusedStudent);
+                    createTimeChart(timeLabels, focusedData);
+                })
+                .catch(error => {
+                    console.error('Error fetching data:', error);
+                });
+        }
+
+        //선택한 기간의 집중하지 않은 학생 수 차트
+        let chartTerm;
+        function startTermChart() {
+            const startday = document.getElementById('startday').value;
+            const lastday = document.getElementById('lastday').value;
+            let lectureName = document.getElementById('lecture-select').value;
+
+            if(!startday || !lastday || !lectureName) {
+                alert("날짜와 강의를 모두 선택해주십시오.");
+                return;
+            }
+
+            fetch(`/get_term_data?lecture_name=${lectureName}&startday=${startday}&lastday=${lastday}`)
+                .then(response => response.json())
+                .then(json => {
+                    const labels = json.map(item => item.date);
+                    const unfocusedData = json.map(item => item.unfocused_students);
+
+                    if (chartTerm) { //기존 차트가 있다면 데이터를 업데이트
+                        chartTerm.data.labels = labels;
+                        chartTerm.data.datasets[0].data = unfocusedData;
+                        chartTerm.update();
+                    } else { //차트가 존재하지 않는다면 생성
+                        const Termctx = document.getElementById('chartTerm').getContext('2d');
+                        chartTerm = new Chart(Termctx, {
+                            type: 'bar',
+                            data: {
+                                labels: labels,
+                                datasets: [{
+                                    label: '집중하지 않은 학생',
+                                    data: unfocusedData,
+                                    backgroundColor: ['rgba(99, 255, 132, 0.8)']
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false
+                            }
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching data:', error);
+                });
+        }
+    </script>
+</body>
+</html>
