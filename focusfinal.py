@@ -2,13 +2,14 @@ import json
 import threading
 import time
 from datetime import datetime
-
 import cv2
 import numpy as np
 import tensorflow as tf
 from picamera2 import Picamera2
 import mediapipe as mp
+from queue import Queue
 import os
+
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
@@ -71,25 +72,26 @@ def save_data():
 threading.Thread(target=save_data, daemon=True).start()
 
 picam2 = Picamera2()
-picam2.configure(picam2.create_still_configuration())
+picam2.configure(picam2.create_video_configuration(main={"size": (320, 240), "format": "RGB888"}))
+picam2.set_controls({"FrameRate": 15})
 picam2.start()
 
-frame_queue = []
+frame_queue = Queue(maxsize=5)
 
 def capture_frames():
     global frame_queue
     while True:
         frame = picam2.capture_array()
-        if frame is not None:
-            frame_queue.append(frame)
-        if len(frame_queue) > 10:
-            frame_queue.pop(0)
+        if frame_queue.full():
+            frame_queue.get()
+        frame_queue.put(frame)
+        time.sleep(0.03)
 
 def process_frames():
     global frame_queue, unique_id
     while True:
-        if frame_queue:
-            frame = frame_queue.pop(0)
+        if not frame_queue.empty():
+            frame = frame_queue.get()
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = pose.process(frame_rgb)
 
@@ -106,7 +108,7 @@ def process_frames():
                     if detect(pose_landmarks):
                         unfocused_count += 1
                         color = (0, 0, 255)
-                        print(f"unfocused: {person_ids[person_idx]}")
+                        print(f"Unfocused: {person_ids[person_idx]}")
                     else:
                         color = (0, 255, 0)
 
@@ -116,7 +118,8 @@ def process_frames():
                 unfocused_counts.append(unfocused_count)
 
             if DEBUG_MODE:
-                cv2.imshow("For Debug window", frame)
+                resized_frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
+                cv2.imshow("Debug Window", resized_frame)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
