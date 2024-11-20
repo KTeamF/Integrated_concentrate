@@ -11,7 +11,7 @@ username = "wjdqlscho"  # 본인의 사용자 이름
 password = "20010506"  # 본인의 비밀번호
 
 # 상대 경로로 로그 디렉토리 설정
-logs_dir = '/Users/wjdqlscho/PycharmProjects/Capstone_Final/logs'  # 라즈베리파이에서는 /home/pi/logs 등 상대 경로로 설정
+logs_dir = '/Users/wjdqlscho/PycharmProjects/Capstone_Final/logs'
 
 def mqtt_subscriber_save():
     def connecting_broker(client, userdata, flags, reason_code):
