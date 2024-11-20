@@ -2,48 +2,59 @@ import json
 import threading
 import time
 from datetime import datetime
-
 import cv2
 import numpy as np
 import tensorflow as tf
 from picamera2 import Picamera2
 import mediapipe as mp
+from queue import Queue
 import os
+
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
+# Check if GPU is available
 print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
 
+# Debug mode flag
 DEBUG_MODE = True
 
+# Initialize Mediapipe pose model
 mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, model_complexity=1)
 unique_id = 0
 
+# Global variables
 person_ids = {}
 unfocused_counts = []
 start_time = time.time()
 
+# Load the TFLite model
 interpreter = tf.lite.Interpreter(model_path='pose_lstm_model_quantized.tflite')
 interpreter.allocate_tensors()
 
+# Get input and output tensors
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
 def detect(pose_landmarks):
     keypoints = []
     for lm in pose_landmarks.landmark:
-        x, y = int(lm.x * 640), int(lm.y * 480)
+        x, y = int(lm.x * 640), int(lm.y * 480)  # Assuming a fixed resolution
         keypoints.append((x, y))
     keypoints_flat = np.array(keypoints).flatten().reshape(1, -1)
-    keypoints_flat = np.pad(keypoints_flat, ((0, 0), (0, 66 - keypoints_flat.shape[1])), 'constant')
-    keypoints_flat = keypoints_flat.reshape((1, 33, 2))
+    keypoints_flat = np.pad(keypoints_flat, ((0, 0), (0, 66 - keypoints_flat.shape[1])), 'constant')  # Pad to fixed length
+    keypoints_flat = keypoints_flat.reshape((1, 33, 2))  # Reshape for LSTM input
 
+    # Convert to FLOAT32
     keypoints_flat = keypoints_flat.astype(np.float32)
 
+    # Set the tensor to point to the input data to be inferred
     interpreter.set_tensor(input_details[0]['index'], keypoints_flat)
 
+    # Run the inference
     interpreter.invoke()
 
+    # Get the output tensor
     output_data = interpreter.get_tensor(output_details[0]['index'])
     return output_data[0][0] > 0.7
 
@@ -55,12 +66,14 @@ def save_data():
             students = len(person_ids)
             unfocused_avg = sum(unfocused_counts) / len(unfocused_counts) if unfocused_counts else 0
 
+            # Create JSON data
             data = {
                 "timestamp": timestamp,
                 "students": students,
                 "unfocused_students": unfocused_avg
             }
 
+            # Write to Student.json
             with open('Student.json', 'a') as f:
                 json.dump(data, f)
                 f.write('\n')
@@ -68,28 +81,31 @@ def save_data():
             unfocused_counts = []
             start_time = time.time()
 
+# Start saving data thread
 threading.Thread(target=save_data, daemon=True).start()
 
+# Initialize Picamera2
 picam2 = Picamera2()
-picam2.configure(picam2.create_still_configuration())
+picam2.configure(picam2.create_video_configuration(main={"size": (320, 240), "format": "RGB888"}))
+picam2.set_controls({"FrameRate": 15})  # Limit FPS to 15
 picam2.start()
 
-frame_queue = []
+frame_queue = Queue(maxsize=5)
 
 def capture_frames():
     global frame_queue
     while True:
         frame = picam2.capture_array()
-        if frame is not None:
-            frame_queue.append(frame)
-        if len(frame_queue) > 10:
-            frame_queue.pop(0)
+        if frame_queue.full():
+            frame_queue.get()  # Remove the oldest frame
+        frame_queue.put(frame)
+        time.sleep(0.03)  # Limit to 30 FPS
 
 def process_frames():
     global frame_queue, unique_id
     while True:
-        if frame_queue:
-            frame = frame_queue.pop(0)
+        if not frame_queue.empty():
+            frame = frame_queue.get()
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = pose.process(frame_rgb)
 
@@ -105,30 +121,35 @@ def process_frames():
 
                     if detect(pose_landmarks):
                         unfocused_count += 1
-                        color = (0, 0, 255)
-                        print(f"unfocused: {person_ids[person_idx]}")
+                        color = (0, 0, 255)  # Red for unfocused
+                        print(f"Unfocused: {person_ids[person_idx]}")
                     else:
-                        color = (0, 255, 0)
+                        color = (0, 255, 0)  # Green for focused
 
                     cv2.putText(frame, f"ID: {person_ids[person_idx]}", (nose_coords[0] + 10, nose_coords[1] - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
                 unfocused_counts.append(unfocused_count)
 
+            # Show the result image (resize for debugging)
             if DEBUG_MODE:
-                cv2.imshow("For Debug window", frame)
+                resized_frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
+                cv2.imshow("Debug Window", resized_frame)
 
+            # Exit on 'q'
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
+# Start capture and processing threads
 threading.Thread(target=capture_frames, daemon=True).start()
 threading.Thread(target=process_frames, daemon=True).start()
 
 try:
     while True:
-        time.sleep(5)
+        time.sleep(5)  # Print status every 5 seconds
 except Exception as e:
     print(f"An error occurred: {e}")
 finally:
+    # Cleanup
     picam2.stop()
     cv2.destroyAllWindows()
