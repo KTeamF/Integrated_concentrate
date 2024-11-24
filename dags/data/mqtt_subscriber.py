@@ -3,21 +3,19 @@ import json
 import os
 
 topic = "focusdata"
-broker_address = "192.168.0.55"  # 라즈베리파이에서 자동으로 브로커 IP를 찾을 수 있도록 수정해야 함
-port = 1884  # 기본 MQTT 포트
+broker_address = "172.20.10.10"
+port = 1884
 
-# 사용자 이름과 비밀번호 설정 (필요한 경우)
-username = "wjdqlscho"  # 본인의 사용자 이름
-password = "20010506"  # 본인의 비밀번호
+username = "wjdqlscho"
+password = "20010506"
 
-# 상대 경로로 로그 디렉토리 설정
 logs_dir = '/Users/wjdqlscho/PycharmProjects/Capstone_Final/logs'
 
 def mqtt_subscriber_save():
     def connecting_broker(client, userdata, flags, reason_code):
         if reason_code == 0:
             print("성공적으로 연결")
-            client.subscribe("focusdata")  # 토픽 이름을 맞춰서 구독
+            client.subscribe("focusdata")
         else:
             print(f"연결 실패, 코드: {reason_code}")
 
@@ -36,7 +34,6 @@ def mqtt_subscriber_save():
 
     client = mqtt.Client()
 
-    # 사용자 이름과 비밀번호 설정
     client.username_pw_set(username, password)
 
     client.on_connect = connecting_broker
