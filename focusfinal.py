@@ -1,137 +1,159 @@
-import json
-import threading
+import logging
+import multiprocessing as multip
+import os
+import socket
+import numpy as np
+import mediapipe as mp
+import tensorflow as tf
 import time
 from datetime import datetime
+import json
+from ultralytics import YOLO
 import cv2
-import numpy as np
-import tensorflow as tf
-from picamera2 import Picamera2
-import mediapipe as mp
-from queue import Queue
-import os
 
+# Suppress TensorFlow logging
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
-print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
 
-DEBUG_MODE = True
+DEBUG_MODE = True  # 디버그 모드 설정
 
-mp_pose = mp.solutions.pose
-pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, model_complexity=1)
-unique_id = 0
+# YOLO 모델 로드
+model = YOLO("yolo11n_float16.tflite")
 
-person_ids = {}
-unfocused_counts = []
-start_time = time.time()
+# Mediapipe 설정
+mp_holistic = mp.solutions.holistic
+holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
-interpreter = tf.lite.Interpreter(model_path='pose_lstm_model_quantized.tflite')
+# TFLite 모델 경로 및 로드
+interpreter_path = 'pose_lstm_model_quantized.tflite'
+interpreter = tf.lite.Interpreter(model_path=interpreter_path)
 interpreter.allocate_tensors()
-
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-def detect(pose_landmarks):
-    keypoints = []
-    for lm in pose_landmarks.landmark:
-        x, y = int(lm.x * 640), int(lm.y * 480)
-        keypoints.append((x, y))
-    keypoints_flat = np.array(keypoints).flatten().reshape(1, -1)
-    keypoints_flat = np.pad(keypoints_flat, ((0, 0), (0, 66 - keypoints_flat.shape[1])), 'constant')
-    keypoints_flat = keypoints_flat.reshape((1, 33, 2))
+# JSON 저장 함수
+def save_data(data):
+    with open('Student.json', 'a') as f:
+        json.dump(data, f)
+        f.write('\n')
 
-    keypoints_flat = keypoints_flat.astype(np.float32)
+# 사람 감지 함수
+def detect_persons(frame):
+    results = model(frame)
+    boxes = []
+    confidences = []
+    for result in results:
+        for box in result.boxes:
+            if box.cls == 0 and box.conf > 0.5:  # Class ID 0은 '사람'
+                x1, y1, x2, y2 = [int(coord) for coord in box.xyxy[0]]
+                boxes.append([x1, y1, x2 - x1, y2 - y1])
+                confidences.append(float(box.conf))
+    return [(boxes[i], confidences[i]) for i in range(len(boxes))]
 
-    interpreter.set_tensor(input_details[0]['index'], keypoints_flat)
+# Mediapipe와 TFLite 모델을 활용한 집중 여부 판단
+def process_person(frame, box, avg_focus):
+    x, y, w, h = box
+    person_img = frame[y:y + h, x:x + w]
+    person_img_rgb = cv2.cvtColor(person_img, cv2.COLOR_BGR2RGB)
+    results = holistic.process(person_img_rgb)
 
-    interpreter.invoke()
+    if results.pose_landmarks:
+        keypoints = [(int(lm.x * w), int(lm.y * h)) for lm in results.pose_landmarks.landmark]
+        keypoints_flat = np.array(keypoints).flatten().reshape(1, -1)
+        keypoints_flat = np.pad(keypoints_flat, ((0, 0), (0, 66 - keypoints_flat.shape[1])), 'constant').reshape(
+            (1, 33, 2)).astype(np.float32)
 
-    output_data = interpreter.get_tensor(output_details[0]['index'])
-    return output_data[0][0] > 0.7
+        interpreter.set_tensor(input_details[0]['index'], keypoints_flat)
+        interpreter.invoke()
+        output_data = interpreter.get_tensor(output_details[0]['index'])
+        return (output_data[0][0] > 0.6, keypoints)
+    else:
+        return (avg_focus > 0.5, [])
 
-def save_data():
-    global unfocused_counts, start_time
+# 소켓 서버에서 스트리밍 데이터 수신
+def receive_stream(server_ip, server_port):
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.bind((server_ip, server_port))
+    server_socket.listen(1)
+    print(f"Listening on {server_ip}:{server_port}...")
+
+    conn, addr = server_socket.accept()
+    print(f"Connection from {addr}")
+
     while True:
+        # 데이터 크기 수신
+        data = conn.recv(4)
+        if not data:
+            break
+
+        frame_size = int.from_bytes(data, byteorder='big')
+        frame_data = b''
+
+        while len(frame_data) < frame_size:
+            frame_data += conn.recv(frame_size - len(frame_data))
+
+        frame = np.frombuffer(frame_data, dtype=np.uint8)
+        frame = cv2.imdecode(frame, cv2.IMREAD_COLOR)
+        yield frame
+
+    conn.close()
+    server_socket.close()
+
+# 메인 실행 함수
+def main(server_ip, server_port):
+    start_time = time.time()
+    unfocused_counts = []
+    persons = []
+    frame_count = 0
+
+    # 멀티프로세싱 풀 설정
+    pool = multip.Pool(processes=2)
+
+    # 소켓 스트리밍 데이터 수신
+    for frame in receive_stream(server_ip, server_port):
+        if frame_count % 4 == 0:
+            persons = detect_persons(frame)
+
+        avg_focus = sum(unfocused_counts) / len(unfocused_counts) if unfocused_counts else 0.5
+        results_list = pool.starmap(process_person, [(frame, box, avg_focus) for box, _ in persons])
+
+        for i, (box, confidence) in enumerate(persons):
+            is_unfocused, keypoints = results_list[i]
+            color = (0, 0, 255) if is_unfocused else (0, 255, 0)  # 집중 시 녹색, 미집중 시 빨간색
+            x, y, w, h = box
+            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+            if is_unfocused:
+                unfocused_counts.append(1)
+            else:
+                unfocused_counts.append(0)
+
         if time.time() - start_time >= 10:
             timestamp = datetime.now().isoformat()
-            students = len(person_ids)
+            students = len(persons)
             unfocused_avg = sum(unfocused_counts) / len(unfocused_counts) if unfocused_counts else 0
-
             data = {
                 "timestamp": timestamp,
                 "students": students,
                 "unfocused_students": unfocused_avg
             }
 
-            with open('Student.json', 'a') as f:
-                json.dump(data, f)
-                f.write('\n')
+            save_data(data)
 
             unfocused_counts = []
             start_time = time.time()
 
-threading.Thread(target=save_data, daemon=True).start()
+        cv2.imshow("Frame", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-picam2 = Picamera2()
-picam2.configure(picam2.create_video_configuration(main={"size": (320, 240), "format": "RGB888"}))
-picam2.set_controls({"FrameRate": 15})
-picam2.start()
+        frame_count += 1
 
-frame_queue = Queue(maxsize=5)
+    pool.close()
+    pool.join()
 
-def capture_frames():
-    global frame_queue
-    while True:
-        frame = picam2.capture_array()
-        if frame_queue.full():
-            frame_queue.get()
-        frame_queue.put(frame)
-        time.sleep(0.03)
-
-def process_frames():
-    global frame_queue, unique_id
-    while True:
-        if not frame_queue.empty():
-            frame = frame_queue.get()
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = pose.process(frame_rgb)
-
-            if results.pose_landmarks:
-                unfocused_count = 0
-                for person_idx, pose_landmarks in enumerate([results.pose_landmarks]):
-                    if person_idx not in person_ids:
-                        person_ids[person_idx] = unique_id
-                        unique_id += 1
-
-                    nose = pose_landmarks.landmark[mp_pose.PoseLandmark.NOSE]
-                    nose_coords = (int(nose.x * frame.shape[1]), int(nose.y * frame.shape[0]))
-
-                    if detect(pose_landmarks):
-                        unfocused_count += 1
-                        color = (0, 0, 255)
-                        print(f"Unfocused: {person_ids[person_idx]}")
-                    else:
-                        color = (0, 255, 0)
-
-                    cv2.putText(frame, f"ID: {person_ids[person_idx]}", (nose_coords[0] + 10, nose_coords[1] - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-                unfocused_counts.append(unfocused_count)
-
-            if DEBUG_MODE:
-                resized_frame = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
-                cv2.imshow("Debug Window", resized_frame)
-
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-threading.Thread(target=capture_frames, daemon=True).start()
-threading.Thread(target=process_frames, daemon=True).start()
-
-try:
-    while True:
-        time.sleep(5)
-except Exception as e:
-    print(f"An error occurred: {e}")
-finally:
-    picam2.stop()
-    cv2.destroyAllWindows()
+if __name__ == "__main__":
+    SERVER_IP = '0.0.0.0'
+    SERVER_PORT = 8080
+    main(SERVER_IP, SERVER_PORT)
